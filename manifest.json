@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Table Exporter",
+  "version": "1.0",
+  "description": "Extract and export table data from your current webpage.",
+  "author": "Zainal Muttaqin",
+  "homepage_url": "https://github.com/aqinfh/table-exporter",
+  "permissions": ["activeTab", "scripting", "clipboardWrite"],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Export Table",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  }
+}

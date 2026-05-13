@@ -1,0 +1,6 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Zipped extension (kalau nanti kamu buat backup zip)
+*.zip
