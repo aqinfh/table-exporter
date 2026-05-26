@@ -30,6 +30,8 @@ if (!window.__tableExporterLoaded) {
     const tables = [];
 
     document.querySelectorAll('table').forEach((el, i) => {
+      // Skip DataTables scroll-cloned header/footer ghost tables (no tbody with data rows)
+      if (el.closest('.dt-scroll-head, .dt-scroll-foot')) return;
       tables.push({ el, type: 'html', label: tableLabel(el, `Table ${i + 1}`) });
     });
 
@@ -50,7 +52,11 @@ if (!window.__tableExporterLoaded) {
         const firstRow = t.el.querySelector('tr');
         cells = firstRow ? Array.from(firstRow.querySelectorAll('th, td')) : [];
       }
-      return cells.map(c => c.textContent.trim());
+      return cells.map(c => {
+        // DataTables wraps title in .dt-column-title; avoid grabbing .dt-column-order aria text
+        const titleEl = c.querySelector('.dt-column-title');
+        return (titleEl ?? c).textContent.trim();
+      });
     }
 
     if (t.type === 'grid') {
