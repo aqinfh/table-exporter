@@ -9,9 +9,15 @@
   const toggleAllBtn = $('toggle-all');
   const btnCopyTsv   = $('btn-copy-tsv');
   const btnCopyCsv   = $('btn-copy-csv');
+  const btnCopyMd    = $('btn-copy-md');
   const btnDownCsv   = $('btn-download-csv');
   const btnDownXls   = $('btn-download-xls');
   const statusEl     = $('status');
+  const previewTable = $('preview-table');
+  const previewEmpty = $('preview-empty');
+  const previewNote  = $('preview-note');
+
+  const PREVIEW_ROWS = 5;
 
   let allSelected = true;
 
@@ -86,6 +92,7 @@
     const newState = !allSelected;
     columnsList.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = newState; });
     updateToggleBtn();
+    schedulePreview();
   });
 
   // ── Chrome helpers ───────────────────────────────────────────────────────────
@@ -114,10 +121,13 @@
     const res = await injectAndSend(activeTab, { action: 'getHeaders', tableIndex });
     if (!res?.ok || !res.data?.length) {
       columnsList.innerHTML = '<span style="font-size:12px;color:#d93025">No headers found.</span>';
+      previewNote.textContent = '';
+      setPreviewEmpty('No headers found.');
       return;
     }
     buildColumnsList(res.data);
     updateCellValueSection(res.sample);
+    schedulePreview();
   }
 
   function updateCellValueSection(sample) {
@@ -188,6 +198,113 @@
     await loadHeadersForTable(idx);
   });
 
+  // ── Preview ──────────────────────────────────────────────────────────────────
+
+  let previewToken = 0;
+  let previewTimer = null;
+
+  function setPreviewEmpty(msg) {
+    previewTable.innerHTML = '';
+    previewEmpty.textContent = msg;
+    previewEmpty.classList.remove('hidden');
+  }
+
+  function truncate(s, n = 60) {
+    s = String(s ?? '').replace(/\s+/g, ' ').trim();
+    return s.length > n ? s.slice(0, n - 1) + '…' : s;
+  }
+
+  function renderPreviewTable(data) {
+    const cols = Math.max(data.headers?.length ?? 0, ...data.rows.map(r => r.length), 1);
+    const rows = data.rows.slice(0, PREVIEW_ROWS);
+    const frag = document.createDocumentFragment();
+
+    const bodyOnly = isBodyOnly();
+
+    if (data.headers?.length) {
+      const thead = document.createElement('thead');
+      const tr = document.createElement('tr');
+      if (bodyOnly) tr.className = 'excluded';
+      for (let i = 0; i < cols; i++) {
+        const th = document.createElement('th');
+        th.textContent = truncate(data.headers[i] ?? `Column ${i + 1}`, 24);
+        th.title = String(data.headers[i] ?? '');
+        tr.appendChild(th);
+      }
+      thead.appendChild(tr);
+      frag.appendChild(thead);
+    }
+
+    const tbody = document.createElement('tbody');
+    rows.forEach(row => {
+      const tr = document.createElement('tr');
+      for (let i = 0; i < cols; i++) {
+        const td = document.createElement('td');
+        td.textContent = truncate(row[i], 40);
+        td.title = String(row[i] ?? '');
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    });
+
+    if (data.rows.length > PREVIEW_ROWS) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.className = 'more';
+      td.colSpan = cols;
+      td.textContent = '…';
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
+
+    frag.appendChild(tbody);
+    previewTable.innerHTML = '';
+    previewTable.appendChild(frag);
+    previewEmpty.classList.add('hidden');
+
+    const shown = Math.min(rows.length, PREVIEW_ROWS);
+    previewNote.textContent = data.rows.length
+      ? `${shown} of ${data.rows.length} rows · ${cols} cols${bodyOnly ? ' · header excluded' : ''}`
+      : 'No rows';
+  }
+
+  async function renderPreview() {
+    const token = ++previewToken;
+    const settings = getSettings();
+
+    if (!settings.selectedIndices.length) {
+      previewNote.textContent = '';
+      setPreviewEmpty('Select at least one column.');
+      return;
+    }
+
+    setPreviewEmpty('Loading preview…');
+    previewNote.textContent = '';
+
+    try {
+      const res = await injectAndSend(activeTab, { action: 'extractData', settings });
+      if (token !== previewToken) return;
+      if (!res?.ok) throw new Error(res?.error ?? 'Unknown error');
+      if (!res.data?.rows?.length) { setPreviewEmpty('No rows found.'); return; }
+      renderPreviewTable(res.data);
+    } catch (err) {
+      if (token !== previewToken) return;
+      setPreviewEmpty(`Preview failed: ${err.message}`);
+    }
+  }
+
+  function schedulePreview() {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(renderPreview, 120);
+  }
+
+  // re-render preview whenever any export-shaping control changes
+  columnsList.addEventListener('change', schedulePreview);
+  ['mode', 'order', 'extract'].forEach(name => {
+    document.querySelectorAll(`input[name="${name}"]`).forEach(el =>
+      el.addEventListener('change', schedulePreview));
+  });
+
   // ── Extract ──────────────────────────────────────────────────────────────────
 
   async function fetchRows() {
@@ -230,6 +347,22 @@
     return getLines(data)
       .map(row => row.map(v => String(v ?? '').replace(/\t/g, ' ')).join('\t'))
       .join('\n');
+  }
+
+  function toMarkdown(data) {
+    const headers = (data.headers && data.headers.length)
+      ? data.headers.map(v => String(v ?? ''))
+      : data.rows[0].map((_, i) => `Col ${i + 1}`);
+    const esc = v => String(v ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ').trim();
+    const rows = data.rows.map(r => r.map(esc));
+    const cols = headers.length;
+    const cells = [headers.map(esc), ...rows];
+    const width = Array.from({ length: cols }, (_, i) =>
+      Math.max(3, ...cells.map(r => (r[i] ?? '').length)));
+    const pad = (s, i) => (s ?? '').padEnd(width[i]);
+    const line = r => '| ' + Array.from({ length: cols }, (_, i) => pad(r[i], i)).join(' | ') + ' |';
+    const sep  = '| ' + width.map(w => '-'.repeat(w)).join(' | ') + ' |';
+    return [line(cells[0]), sep, ...rows.map(line)].join('\n');
   }
 
   function escapeXml(s) {
@@ -299,6 +432,13 @@
     if (!data) return;
     await copyText(toCSV(data, getDelimiter()));
     showStatus('Copied as CSV.', 'ok');
+  }));
+
+  btnCopyMd.addEventListener('click', () => withDisabled([btnCopyMd], async () => {
+    const data = await fetchRows();
+    if (!data) return;
+    await copyText(toMarkdown(data));
+    showStatus('Copied as Markdown table.', 'ok');
   }));
 
   btnDownCsv.addEventListener('click', () => withDisabled([btnDownCsv], async () => {
